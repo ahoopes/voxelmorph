@@ -70,14 +70,12 @@ model_dir = args.model_dir
 os.makedirs(model_dir, exist_ok=True)
 
 # tensorflow gpu handling
-# device = '/gpu:' + args.gpu
-# os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-# config = tf.ConfigProto()
-# config.gpu_options.allow_growth = True
-# config.allow_soft_placement = True
-# tf.keras.backend.set_session(tf.Session(config=config))
-device = '/cpu:0'
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+device = '/gpu:' + args.gpu
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
+config.allow_soft_placement = True
+tf.keras.backend.set_session(tf.Session(config=config))
 
 # ensure valid batch size given gpu count
 nb_gpus = len(args.gpu.split(','))
