@@ -148,7 +148,7 @@ class VxmAffine(LoadableModel):
     """
 
     @store_config_args
-    def __init__(self, inshape, enc_nf, bidir=False, transform_type='affine', blurs=[1]):
+    def __init__(self, inshape, enc_nf, bidir=False, transform_type='affine', blurs=[1], rescale_affine=1.0):
         """
         Parameters:
             inshape: Input shape. e.g. (192, 192, 192)
@@ -156,6 +156,8 @@ class VxmAffine(LoadableModel):
             bidir: Enable bidirectional cost function. Default is False.
             transform_type: 'affine' (default), 'rigid' or 'rigid+scale' currently
             blurs: List of gaussian blur kernel levels for inputs. Default is [1].
+            rescale_affine: a scalar (or ndims*(ndims+1)) array) to rescale the output of the dense layer
+                this improves stability by enabling different gradient flow to affect the affine parameters
         """
 
         # ensure correct dimensionality
@@ -186,30 +188,31 @@ class VxmAffine(LoadableModel):
         source = Input(shape=[*inshape, 1])
         target = Input(shape=[*inshape, 1])
 
+        scale_affines = []
+        full_affine = None
+        y_source = source
+
         # build net with multi-scales
-        affines = []
-        scale_source = source
         for blur in blurs:
             # set input and blur using gaussian kernel  
-            source_blur = gaussian_blur(scale_source, blur, ndims)
+            source_blur = gaussian_blur(y_source, blur, ndims)
             target_blur = gaussian_blur(target, blur, ndims)
-            x_in = concatenate([source_blur, target_blur])
 
-            # apply base net to affine
-            affine = basenet(x_in)
-            affines.append(affine)
- 
-            # spatial transform using affine matrix
-            y_source = layers.SpatialTransformer()([source_blur, affine])
+            # per-scale affine encoder
+            curr_affine_scaled = basenet(concatenate([source_blur, target_blur]))
+            curr_affine = ne.layers.RescaleValues(rescale_affine)(curr_affine_scaled)
+            scale_affines.append(curr_affine)
+
+            # compose affine at this scale
+            full_affine = curr_affine if full_affine is None else layers.ComposeTransform()([full_affine, curr_affine])
 
             # provide new input for next scale
-            if len(blurs) > 1:
-                scale_source = layers.SpatialTransformer()([scale_source, affine])
+            y_source = layers.SpatialTransformer()([source, full_affine])
 
         # invert affine for bidirectional training
         if bidir:
-            inv_affine = layers.InvertAffine()(affine)
-            y_target = layers.SpatialTransformer()([target_blur, inv_affine])
+            inv_affine = layers.InvertAffine()(full_affine)
+            y_target = layers.SpatialTransformer()([target, inv_affine])
             outputs = [y_source, y_target]
         else:
             outputs = [y_source]
@@ -219,25 +222,16 @@ class VxmAffine(LoadableModel):
 
         # cache affines
         self.references = LoadableModel.ReferenceContainer()
-        self.references.affines = affines
+        self.references.affine = full_affine
+        self.references.scale_affines = scale_affines
         self.references.transform_type = transform_type
 
     def get_predictor_model(self):
         """
         Extracts a predictor model from the VxmAffine that directly outputs the
-        computed affines instead of the transformed source image.
+        computed affine instead of the transformed source image.
         """
-        return tf.keras.Model(self.inputs, self.references.affines)
-
-    def get_affine_transformer(self, inshape):
-        """
-        Builds the appropriate affine transformer network that applies an
-        affine registration matrix to an image.
-        """
-        source = Input(shape=(*inshape, 1))
-        affine = Input(shape=[12])
-        aligned = layers.SpatialTransformer()([source, affine])
-        return Model([source, affine], aligned)
+        return tensorflow.keras.Model(self.inputs, self.references.affine)
 
 
 class VxmAffineDense(LoadableModel):
@@ -626,7 +620,7 @@ class VxmAffineSegSemiSupervised(LoadableModel):
     """
 
     @store_config_args
-    def __init__(self, inshape, enc_nf, nb_labels, int_downsize=2, seg_downsize=2, transform_type='affine', blurs=[1], bidir=False):
+    def __init__(self, inshape, enc_nf, nb_labels, int_downsize=2, seg_downsize=2, **kwargs):
         """
         Parameters:
             inshape: Input shape. e.g. (192, 192, 192)
@@ -636,22 +630,24 @@ class VxmAffineSegSemiSupervised(LoadableModel):
             int_downsize: Integer specifying the flow downsample factor for vector integration. The flow field
                 is not downsampled when this value is 1.
             seg_downsize: Interger specifying the downsampled factor of the segmentations. Default is 2.
+            kwargs: Forwarded to the internal VxmAffine model.
         """
 
         # configure base voxelmorph network
-        vxm_model = VxmAffine(inshape, enc_nf, transform_type=transform_type, bidir=bidir, blurs=blurs)
+        vxm_model = VxmAffine(inshape, enc_nf, **kwargs)
 
         # configure downsampled seg input layer
         inshape_downsized = (np.array(inshape) / seg_downsize).astype(int)
         seg_src = Input(shape=(*inshape_downsized, nb_labels))
 
         # configure warped seg output layer
+        seg_transformer_layer = layers.SpatialTransformer(interp_method='linear', indexing='ij', name='seg_transformer')
         if seg_downsize > 1:
-            # TODO: fix this - affines can't be rescaled
-            seg_flow = layers.RescaleTransform(1 / seg_downsize, name='seg_resize')(vxm_model.references.affines[0])
-            y_seg = layers.SpatialTransformer(interp_method='linear', indexing='ij', name='seg_transformer')([seg_src, seg_flow])
+            # TODO: this fails, not sure why (BRF)
+            seg_flow = layers.RescaleTransform(1 / seg_downsize, name='seg_resize')(vxm_model.references.affine)
+            y_seg = seg_transformer_layer([seg_src, seg_flow])
         else:
-            y_seg = layers.SpatialTransformer(interp_method='linear', indexing='ij', name='seg_transformer')([seg_src, vxm_model.references.affines[0]])
+            y_seg = seg_transformer_layer([seg_src, vxm_model.references.affine])
 
         # initialize the keras model
         inputs = vxm_model.inputs + [seg_src]
@@ -660,7 +656,7 @@ class VxmAffineSegSemiSupervised(LoadableModel):
 
         # cache pointers to important layers and tensors for future reference
         self.references = LoadableModel.ReferenceContainer()
-        self.references.affines = vxm_model.references.affines
+        self.references.affine = vxm_model.references.affine
         self.references.affine_model = vxm_model
 
     def get_predictor_model(self):
@@ -668,7 +664,7 @@ class VxmAffineSegSemiSupervised(LoadableModel):
         Extracts a predictor model from the VxmDense that directly outputs the warped image and 
         final diffeomorphic warp field (instead of the non-integrated flow field used for training).
         """
-        self.references.affine_model.get_predictor_model()
+        return self.references.affine_model.get_predictor_model()
 
 
 class VxmDenseSurfaceSemiSupervised(LoadableModel):
@@ -765,7 +761,7 @@ class VxmAffineSurfaceSemiSupervised(LoadableModel):
 
         # vm model
         affine_model = VxmAffine(inshape, enc_nf, **kwargs)
-        affine_tensor = affine_model.references.affines[0]
+        affine_tensor = affine_model.references.affine
         dense_tensor = layers.AffineToDense(inshape)(affine_tensor)
         dense = tf.keras.models.Model(affine_model.inputs, dense_tensor)
         inverse_affine = layers.InvertAffine()(affine_tensor)
@@ -803,9 +799,12 @@ class VxmAffineSurfaceSemiSupervised(LoadableModel):
         # cache pointers to important layers and tensors for future reference
         self.references = LoadableModel.ReferenceContainer()
         self.references.affine_model = affine_model
-        self.references.affines = affine_model.references.affines
+        self.references.affine = affine_model.references.affine
         self.references.pos_flow = pos_flow
         self.references.neg_flow = neg_flow
+
+    def get_predictor_model(self):
+        return self.references.affine_model.get_predictor_model()
 
 
 class VxmSynthetic(LoadableModel):
@@ -883,7 +882,7 @@ class Transform(Model):
         scan_input = Input((*inshape, nb_feats), name='scan_input')
 
         if affine:
-            trf_input = Input((12), name='trf_input')
+            trf_input = Input((ndims * (ndims + 1),), name='trf_input')
         else:
             trf_input = Input((*inshape, ndims), name='trf_input')
 
