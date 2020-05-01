@@ -211,22 +211,6 @@ def conditional_template_creation(vol_names, atlas, attributes, batch_size=1, np
         yield (invols, outvols)
 
 
-# TODOATH remove this
-def hypertuning(base_gen, batch_size=1, nb_params=1):
-    """
-    Generates random input values between 0 and 1 for hyperparameter tuning.
-
-    Parameters:
-        base_gen: Base generator function to add to.
-        batch_size: Training batch size. Default is 1.
-        nb_params: Number of hypertuning parameters. Default is 1.
-    """
-    while True:
-        invols, outvols = next(base_gen)
-        rand = np.random.random((batch_size, nb_params))
-        yield (invols + [rand], outvols)
-
-
 def surf_semisupervised(
         vol_names,
         atlas_vol,
