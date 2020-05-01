@@ -1,10 +1,7 @@
 import numpy as np
-import neuron as ne
 from collections.abc import Iterable
 
 import tensorflow as tf
-from tensorflow import keras
-import tensorflow
 import tensorflow.keras.backend as K
 import tensorflow.keras.layers as KL
 from tensorflow.keras.models import Model, Sequential
@@ -12,9 +9,14 @@ from tensorflow.keras.layers import Layer, Conv3D, Activation, Input, UpSampling
 from tensorflow.keras.layers import concatenate, LeakyReLU, Reshape, Lambda
 from tensorflow.keras.initializers import RandomNormal, Constant
 
-from .. import utils
 from . import layers
-from .model_io import LoadableModel, store_config_args
+from . import neuron as ne
+from .modelio import LoadableModel, store_config_args
+from .utils import gaussian_blur, value_at_location, point_spatial_transformer
+
+
+# make ModelCheckpointParallel directly available from vxm
+ModelCheckpointParallel = ne.callbacks.ModelCheckpointParallel
 
 
 class VxmDense(LoadableModel):
@@ -137,7 +139,7 @@ class VxmDense(LoadableModel):
         Extracts a predictor model from the VxmDense that directly outputs the warped image and 
         final diffeomorphic warp field (instead of the non-integrated flow field used for training).
         """
-        return tensorflow.keras.Model(self.inputs, [self.references.y_source, self.references.pos_flow])
+        return tf.keras.Model(self.inputs, [self.references.y_source, self.references.pos_flow])
 
 
 class VxmAffine(LoadableModel):
@@ -225,7 +227,7 @@ class VxmAffine(LoadableModel):
         Extracts a predictor model from the VxmAffine that directly outputs the
         computed affines instead of the transformed source image.
         """
-        return tensorflow.keras.Model(self.inputs, self.references.affines)
+        return tf.keras.Model(self.inputs, self.references.affines)
 
     def get_affine_transformer(self, inshape):
         """
@@ -299,9 +301,9 @@ class InstanceTrainer(LoadableModel):
 
     @store_config_args
     def __init__(self, inshape, warp):
-        source = tensorflow.keras.layers.Input(shape=inshape)
-        target = tensorflow.keras.layers.Input(shape=inshape)
-        nullwarp = tensorflow.keras.layers.Input(shape=warp.shape[1:])  # this is basically ignored by LocalParamWithInput
+        source = tf.keras.layers.Input(shape=inshape)
+        target = tf.keras.layers.Input(shape=inshape)
+        nullwarp = tf.keras.layers.Input(shape=warp.shape[1:])  # this is basically ignored by LocalParamWithInput
         flow_layer = vxm.layers.LocalParamWithInput(shape=warp.shape[1:])
         flow = flow_layer(nullwarp)
         y = vxm.layers.SpatialTransformer()([source, flow])
@@ -377,8 +379,8 @@ class ProbAtlasSegmentation(LoadableModel):
         stat_logssq_vol = Conv(nb_labels, kernel_size=3, name='logsigmasq_vol', kernel_initializer=weaknorm, bias_initializer=weaknorm)(conv)
         
         # pool to get 'final' stat
-        stat_mu = tensorflow.keras.layers.GlobalMaxPooling3D()(stat_mu_vol)
-        stat_logssq = tensorflow.keras.layers.GlobalMaxPooling3D()(stat_logssq_vol)
+        stat_mu = tf.keras.layers.GlobalMaxPooling3D()(stat_mu_vol)
+        stat_logssq = tf.keras.layers.GlobalMaxPooling3D()(stat_logssq_vol)
 
         # combine mu with initialization
         if init_mu is not None: 
@@ -426,7 +428,7 @@ class ProbAtlasSegmentation(LoadableModel):
             self.references.stat_logssq,
             self.outputs[-1]
         ]
-        return tensorflow.keras.Model(self.inputs, outputs)
+        return tf.keras.Model(self.inputs, outputs)
 
 
 class TemplateCreation(LoadableModel):
@@ -522,7 +524,7 @@ class ConditionalTemplateCreation(LoadableModel):
         pheno_input = KL.Input(pheno_input_shape, name='pheno_input')
         pheno_dense = KL.Dense(np.prod(conv_image_shape), activation='elu')(pheno_input)
         pheno_reshaped = KL.Reshape(conv_image_shape)(pheno_dense)
-        pheno_init_model = tensorflow.keras.models.Model(pheno_input, pheno_reshaped)
+        pheno_init_model = tf.keras.models.Model(pheno_input, pheno_reshaped)
 
         # build model to decode reshaped pheno
         pheno_decoder_model = ne.models.conv_dec(conv_nb_features, conv_image_shape, conv_nb_levels, conv_size,
@@ -559,7 +561,7 @@ class ConditionalTemplateCreation(LoadableModel):
             atlas_tensor = KL.Add(name='atlas')([atlas_input, atlas_gen])
 
         # build complete pheno to atlas model
-        pheno_model = tensorflow.keras.models.Model([pheno_decoder_model.input, atlas_input], atlas_tensor)
+        pheno_model = tf.keras.models.Model([pheno_decoder_model.input, atlas_input], atlas_tensor)
 
         inputs = [pheno_decoder_model.input, atlas_input, source_input]
         warp_input_model = tf.keras.Model(inputs=inputs, outputs=[atlas_tensor, source_input])
@@ -702,22 +704,22 @@ class VxmDenseSurfaceSemiSupervised(LoadableModel):
         dense = VxmDense(inshape, nb_unet_features=nb_unet_features, bidir=True, **kwargs)
 
         # surface inputs and invert atlas_v for inverse transform to get final 'atlas surface'
-        atl_surf_input = tensorflow.keras.layers.Input(surface_points_shape, name='atl_surface_input')
+        atl_surf_input = tf.keras.layers.Input(surface_points_shape, name='atl_surface_input')
 
         # warp atlas surface
         # NOTE: pos diffflow is used to define an image moving x --> A, but when moving points, it moves A --> x
         warped_atl_surf_pts = Lambda(single_pt_trf, name='warped_atl_surface')([atl_surf_input, dense.references.pos_flow])
 
         # get value of dt_input *at* warped_atlas_surface
-        subj_dt_input = tensorflow.keras.layers.Input([*sdt_shape, nb_labels_sample], name='subj_dt_input')
+        subj_dt_input = tf.keras.layers.Input([*sdt_shape, nb_labels_sample], name='subj_dt_input')
         subj_dt_value = Lambda(value_at_location, name='hausdorff_subj_dt')([subj_dt_input, warped_atl_surf_pts])
 
         if surf_bidir:
             # go the other way and warp subject to atlas
-            subj_surf_input = tensorflow.keras.layers.Input(surface_points_shape, name='subj_surface_input')
+            subj_surf_input = tf.keras.layers.Input(surface_points_shape, name='subj_surface_input')
             warped_subj_surf_pts = Lambda(single_pt_trf, name='warped_subj_surface')([subj_surf_input, dense.references.neg_flow])
 
-            atl_dt_input = tensorflow.keras.layers.Input([*sdt_shape, nb_labels_sample], name='atl_dt_input')
+            atl_dt_input = tf.keras.layers.Input([*sdt_shape, nb_labels_sample], name='atl_dt_input')
             atl_dt_value = Lambda(value_at_location, name='hausdorff_atl_dt')([atl_dt_input, warped_subj_surf_pts])
 
             inputs  = [*dense.inputs, subj_dt_input, atl_dt_input, subj_surf_input, atl_surf_input]
@@ -770,22 +772,22 @@ class VxmAffineSurfaceSemiSupervised(LoadableModel):
         pos_flow = dense_tensor
         neg_flow = layers.AffineToDense(inshape)(inverse_affine)
         # surface inputs and invert atlas_v for inverse transform to get final 'atlas surface'
-        atl_surf_input = tensorflow.keras.layers.Input(surface_points_shape, name='atl_surface_input')
+        atl_surf_input = tf.keras.layers.Input(surface_points_shape, name='atl_surface_input')
 
         # warp atlas surface
         # NOTE: pos diffflow is used to define an image moving x --> A, but when moving points, it moves A --> x
         warped_atl_surf_pts = Lambda(single_pt_trf, name='warped_atl_surface')([atl_surf_input, pos_flow])
 
         # get value of dt_input *at* warped_atlas_surface
-        subj_dt_input = tensorflow.keras.layers.Input([*sdt_shape, nb_labels_sample], name='subj_dt_input')
+        subj_dt_input = tf.keras.layers.Input([*sdt_shape, nb_labels_sample], name='subj_dt_input')
         subj_dt_value = Lambda(value_at_location, name='hausdorff_subj_dt')([subj_dt_input, warped_atl_surf_pts])
 
         if surf_bidir:
             # go the other way and warp subject to atlas
-            subj_surf_input = tensorflow.keras.layers.Input(surface_points_shape, name='subj_surface_input')
+            subj_surf_input = tf.keras.layers.Input(surface_points_shape, name='subj_surface_input')
             warped_subj_surf_pts = Lambda(single_pt_trf, name='warped_subj_surface')([subj_surf_input, neg_flow])
 
-            atl_dt_input = tensorflow.keras.layers.Input([*sdt_shape, nb_labels_sample], name='atl_dt_input')
+            atl_dt_input = tf.keras.layers.Input([*sdt_shape, nb_labels_sample], name='atl_dt_input')
             atl_dt_value = Lambda(value_at_location, name='hausdorff_atl_dt')([atl_dt_input, warped_subj_surf_pts])
 
             inputs  = [*affine_model.inputs, subj_dt_input, atl_dt_input, subj_surf_input, atl_surf_input]
@@ -993,80 +995,3 @@ class Unet(Model):
             last = conv_block(last, nf, name=name)
 
         return super().__init__(inputs=input_model.inputs, outputs=last)
-
-
-def gaussian_blur(tensor, level, ndims):
-    """
-    Blurs a tensor using a gaussian kernel (if level=1, then do nothing).
-    """
-    if level > 1:
-        sigma = (level-1) ** 2
-        blur_kernel = ne.utils.gaussian_kernel([sigma] * ndims)
-        blur_kernel = tf.reshape(blur_kernel, blur_kernel.shape.as_list() + [1, 1])
-        if ndims == 3:
-            conv = lambda x: tf.nn.conv3d(x, blur_kernel, [1, 1, 1, 1, 1], 'SAME')
-        else:
-            conv = lambda x: tf.nn.conv2d(x, blur_kernel, [1, 1, 1, 1], 'SAME')
-        return KL.Lambda(conv)(tensor)
-    elif level == 1:
-        return tensor
-    else:
-        raise ValueError('Gaussian blur level must not be less than 1')
-
-
-def value_at_location(x, single_vol=False, single_pts=False, force_post_absolute_val=True):
-    """
-    Extracts value at given point.
-    """
-    
-    # vol is batch_size, *vol_shape, nb_feats
-    # loc_pts is batch_size, nb_surface_pts, D or D+1
-    vol, loc_pts = x
-
-    fn = lambda y: ne.utils.interpn(y[0], y[1])
-    z = tf.map_fn(fn, [vol, loc_pts], dtype=tf.float32)
-
-    if force_post_absolute_val:
-        z = K.abs(z)
-    return z
-
-
-def point_spatial_transformer(x, single=False, sdt_vol_resize=1):
-    """
-    Transforms surface points with a given deformation.
-    Note that the displacement field that moves image A to image B will be "in the space of B".
-    That is, `trf(p)` tells you "how to move data from A to get to location `p` in B". 
-    Therefore, that same displacement field will warp *landmarks* in B to A easily 
-    (that is, for any landmark `L(p)`, it can easily find the appropriate `trf(L(p))` via interpolation.
-    """
-
-    # surface_points is a N x D or a N x (D+1) Tensor
-    # trf is a *volshape x D Tensor
-    surface_points, trf = x
-    trf = trf * sdt_vol_resize
-    surface_pts_D = surface_points.get_shape().as_list()[-1]
-    trf_D = trf.get_shape().as_list()[-1]
-    assert surface_pts_D in [trf_D, trf_D + 1]
-
-    if surface_pts_D == trf_D + 1:
-        li_surface_pts = K.expand_dims(surface_points[..., -1], -1)
-        surface_points = surface_points[..., :-1]
-
-    # just need to interpolate.
-    # at each location determined by surface point, figure out the trf...
-    # note: if surface_points are on the grid, gather_nd should work as well
-    fn = lambda x: ne.utils.interpn(x[0], x[1])
-    diff = tf.map_fn(fn, [trf, surface_points], dtype=tf.float32)
-    ret = surface_points + diff
-
-    if surface_pts_D == trf_D + 1:
-        ret = tf.concat((ret, li_surface_pts), -1)
-
-    return ret
-
-
-# make ModelCheckpointParallel directly available from vxm
-ModelCheckpointParallel = ne.callbacks.ModelCheckpointParallel
-
-# make neuron.utils.transform directly available from vxm
-neuron_transform = ne.utils.transform

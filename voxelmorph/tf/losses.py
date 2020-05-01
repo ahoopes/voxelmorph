@@ -10,7 +10,7 @@ class NCC:
     Local (over window) normalized cross correlation loss.
     """
 
-    def __init__(self, win=None, eps=1e-5, blur_level=1):
+    def __init__(self, win=None, eps=1e-5):
         self.win = win
         self.eps = eps
         self.blur_level = blur_level  # gaussian blur level for bluring y_true
@@ -27,14 +27,6 @@ class NCC:
 
         # get convolution function
         conv_fn = getattr(tf.nn, 'conv%dd' % ndims)
-
-        # blur y_true
-        if self.blur_level > 1:
-            sigma = (self.blur_level - 1) ** 2
-            blur_kernel = nrn_utils.gaussian_kernel([sigma] * ndims)
-            blur_kernel = tf.reshape(blur_kernel, blur_kernel.shape.as_list() + [1, 1])
-            blur = lambda x: tf.nn.conv3d(x, blur_kernel, [1, 1, 1, 1, 1], 'SAME')
-            I = KL.Lambda(blur)(I)
 
         # compute CC squares
         I2 = I * I

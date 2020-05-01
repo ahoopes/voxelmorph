@@ -48,27 +48,27 @@ else:
 
 # load moving and fixed images
 add_feat_axis = not args.multichannel
-moving = vxm.utils.load_volfile(args.moving, add_feat_axis=add_feat_axis)
-fixed, fixed_affine = vxm.utils.load_volfile(args.fixed, add_feat_axis=add_feat_axis, ret_affine=True)
+moving = vxm.py.utils.load_volfile(args.moving, add_feat_axis=add_feat_axis)
+fixed, fixed_affine = vxm.py.utils.load_volfile(args.fixed, add_feat_axis=add_feat_axis, ret_affine=True)
 
 if args.affine_model:
 
     # pad inputs to a standard size
     padshape = [256 for _ in moving.shape[:-1]] + [moving.shape[-1]]
-    moving_padded, _ = vxm.utils.pad(moving, padshape)
-    fixed_padded, cropping = vxm.utils.pad(fixed, padshape)
+    moving_padded, _ = vxm.py.utils.pad(moving, padshape)
+    fixed_padded, cropping = vxm.py.utils.pad(fixed, padshape)
 
     # scale image sizes by some factor
     resize = 0.25
-    moving_resized = vxm.utils.resize(moving_padded, resize)[np.newaxis]
-    fixed_resized = vxm.utils.resize(fixed_padded, resize)[np.newaxis]
+    moving_resized = vxm.py.utils.resize(moving_padded, resize)[np.newaxis]
+    fixed_resized = vxm.py.utils.resize(fixed_padded, resize)[np.newaxis]
 
     with tf.device(device):
         # load the affine model, predict the transform(s), and merge
         affine_net = vxm.networks.VxmAffine.load(args.affine_model)
         affine_predictor = affine_net.get_predictor_model()
         affines = affine_predictor.predict([moving_resized, fixed_resized])
-        affine = vxm.utils.affine_merge(affines, resize)
+        affine = vxm.py.utils.affine_merge(affines, resize)
 
         # apply the transform and crop back to the target space
         moving = moving_padded[np.newaxis]
@@ -91,7 +91,7 @@ if args.model:
 
     # save warp
     if args.save_warp:
-        vxm.utils.save_volfile(warp.squeeze(), args.save_warp, fixed_affine)
+        vxm.py.utils.save_volfile(warp.squeeze(), args.save_warp, fixed_affine)
 
 # save moved image
-vxm.utils.save_volfile(moved.squeeze(), args.moved, fixed_affine)
+vxm.py.utils.save_volfile(moved.squeeze(), args.moved, fixed_affine)

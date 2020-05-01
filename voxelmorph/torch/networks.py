@@ -3,9 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.normal import Normal
 
-from .. import utils
 from . import layers
-from .model_io import LoadableModel, store_config_args
+from .modelio import LoadableModel, store_config_args
 
 
 class Unet(nn.Module):
