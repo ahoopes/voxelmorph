@@ -3,7 +3,7 @@ import tensorflow as tf
 import tensorflow.keras.backend as K
 
 from . import neuron as ne
-from .layers import SpatialTransformer, RescaleTransform
+from . import layers
 
 
 def transform(img, trf, interp_method='linear', rescale=None):
@@ -14,8 +14,8 @@ def transform(img, trf, interp_method='linear', rescale=None):
     img_input = tf.keras.Input(shape=img[1:])
     trf_input = tf.keras.Input(shape=trf[1:])
     if rescale is not None:
-        trf_input = RescaleTransform(rescale)(trf_input)
-    y_img = SpatialTransformer(interp_method=interp_method)([img_input, trf_input])
+        trf_input = layers.RescaleTransform(rescale)(trf_input)
+    y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, trf_input])
     return tf.keras.Model([img_input, trf_input], y_img).predict([img, trf])
 
 
