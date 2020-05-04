@@ -56,7 +56,7 @@ generator_args = dict(no_warp=True, batch_size=batch_size, pad_shape=args.paddin
 
 if args.atlas:
     # scan-to-atlas generator
-    atlas = vxm.py.utils.load_volfile(args.atlas, np_var='vol', add_batch_axis=True, add_feat_axis=True)
+    atlas = vxm.py.utils.load_volfile(args.atlas, np_var='vol', add_batch_axis=True, add_feat_axis=True, resize_factor=args.resize, pad_shape=args.padding)
     generator = vxm.generators.scan_to_atlas(train_vol_names, atlas, **generator_args)
 else:
     # scan-to-scan generator
