@@ -133,23 +133,23 @@ class VxmDense(LoadableModel):
         self.references.pos_flow = pos_flow
         self.references.neg_flow = neg_flow if bidir else None
 
-    def get_warp_model(self):
+    def get_registration_model(self):
         """
         Returns a reconfigured model to predict only the final transform.
         """
         return tf.keras.Model(self.inputs, self.references.pos_flow)
 
-    def predict_warp(self, src, trg):
+    def register(self, src, trg):
         """
         Predicts the transform from src to trg tensors.
         """
-        return self.get_warp_model().predict([src, trg])
+        return self.get_registration_model().predict([src, trg])
 
-    def apply_warp(self, src, trg, img, interp_method='linear'):
+    def apply_transform(self, src, trg, img, interp_method='linear'):
         """
         Predicts the transform from src to trg and applies it to the img tensor.
         """
-        warp_model = self.get_warp_model()
+        warp_model = self.get_registration_model()
         img_input = tf.keras.Input(shape=img[1:])
         y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, warp_model.output])
         return tf.keras.Model(warp_model.inputs + [img_input], y_img).predict([src, trg, img])
@@ -199,8 +199,8 @@ class VxmAffine(LoadableModel):
             basenet.add(KL.Dense(ndims * (ndims + 1), name='dense'))
 
         # inputs
-        source = tf.keras.Input(shape=[*inshape, 1])
-        target = tf.keras.Input(shape=[*inshape, 1])
+        source = tf.keras.Input(shape=[*inshape, 1], name='source_input')
+        target = tf.keras.Input(shape=[*inshape, 1], name='target_input')
 
         scale_affines = []
         full_affine = None
@@ -246,23 +246,23 @@ class VxmAffine(LoadableModel):
         self.references.scale_affines = scale_affines
         self.references.transform_type = transform_type
 
-    def get_warp_model(self):
+    def get_registration_model(self):
         """
         Returns a reconfigured model to predict only the final transform.
         """
         return tf.keras.Model(self.inputs, self.references.affine)
 
-    def predict_warp(self, src, trg):
+    def register(self, src, trg):
         """
         Predicts the transform from src to trg tensors.
         """
-        return self.get_warp_model().predict([src, trg])
+        return self.get_registration_model().predict([src, trg])
 
-    def apply_warp(self, src, trg, img, interp_method='linear'):
+    def apply_transform(self, src, trg, img, interp_method='linear'):
         """
         Predicts the transform from src to trg and applies it to the img tensor.
         """
-        warp_model = self.get_warp_model()
+        warp_model = self.get_registration_model()
         img_input = tf.keras.Input(shape=img[1:])
         y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, warp_model.output])
         return tf.keras.Model(warp_model.inputs + [img_input], y_img).predict([src, trg, img])
@@ -305,25 +305,56 @@ class VxmAffineDense(LoadableModel):
 
         # affine component
         affine_model = VxmAffine(inshape, enc_nf_affine, transform_type=transform_type, bidir=affine_bidir, blurs=affine_blurs)
+        source = affine_model.inputs[0]
+        affine = affine_model.references.affine
 
         # build a dense model that takes the affine transformed src as input
-        dense_model = VxmDense(inshape, nb_unet_features=nb_unet_features, **kwargs)
-        dense_model_outputs = dense_model([affine_model.outputs[0], affine_model.inputs[1]])
-        dense_warp = dense_model_outputs[1]
+        dense_input_model = tf.keras.Model(affine_model.inputs, (affine_model.outputs[0], affine_model.inputs[1]))
+        dense_model = VxmDense(inshape, nb_unet_features=nb_unet_features, input_model=dense_input_model, **kwargs)
+        flow_params = dense_model.outputs[1]
+        pos_flow = dense_model.references.pos_flow
 
         # build a single transform that applies both affine and dense to src
         # and apply it to the input (src) volume so that there is only 1 interpolation
         # and output it as the combined model output (plus the dense warp)
-        composed = layers.ComposeTransform()([affine_model.references.affine, dense_warp])
-        output_image = layers.SpatialTransformer()([affine_model.inputs[0], composed])
+        composed = layers.ComposeTransform()([affine, pos_flow])
+        y_source = layers.SpatialTransformer()([source, composed])
 
         # initialize the keras model
-        super().__init__(inputs=affine_model.inputs, outputs=[output_image, dense_warp])
+        super().__init__(inputs=affine_model.inputs, outputs=[y_source, flow_params])
 
         # cache pointers to layers and tensors for future reference
         self.references = LoadableModel.ReferenceContainer()
-        self.references.affine_model = affine_model
-        self.references.dense_model = dense_model
+        self.references.affine = affine
+        self.references.pos_flow = pos_flow
+        self.references.composed = composed
+
+    def get_split_registration_model(self):
+        """
+        Returns a reconfigured model to predict only the final affine and dense transforms.
+        """
+        return tf.keras.Model(self.inputs, [self.references.affine, self.references.pos_flow])
+
+    def get_registration_model(self):
+        """
+        Returns a reconfigured model to predict only the final composed transform.
+        """
+        return tf.keras.Model(self.inputs, self.references.composed)
+
+    def register(self, src, trg):
+        """
+        Predicts the transform from src to trg tensors.
+        """
+        return self.get_registration_model().predict([src, trg])
+
+    def apply_transform(self, src, trg, img, interp_method='linear'):
+        """
+        Predicts the transform from src to trg and applies it to the img tensor.
+        """
+        warp_model = self.get_registration_model()
+        img_input = tf.keras.Input(shape=img[1:])
+        y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, warp_model.output])
+        return tf.keras.Model(warp_model.inputs + [img_input], y_img).predict([src, trg, img])
 
 
 class InstanceTrainer(LoadableModel):
@@ -651,6 +682,31 @@ class VxmDenseSegSemiSupervised(LoadableModel):
         outputs = vxm_model.outputs + [y_seg]
         super().__init__(inputs=inputs, outputs=outputs)
 
+        # cache pointers to important layers and tensors for future reference
+        self.references = LoadableModel.ReferenceContainer()
+        self.references.pos_flow = vxm_model.references.pos_flow
+
+    def get_registration_model(self):
+        """
+        Returns a reconfigured model to predict only the final transform.
+        """
+        return tf.keras.Model(self.inputs[:2], self.references.pos_flow)
+
+    def register(self, src, trg):
+        """
+        Predicts the transform from src to trg tensors.
+        """
+        return self.get_registration_model().predict([src, trg])
+
+    def apply_transform(self, src, trg, img, interp_method='linear'):
+        """
+        Predicts the transform from src to trg and applies it to the img tensor.
+        """
+        warp_model = self.get_registration_model()
+        img_input = tf.keras.Input(shape=img[1:])
+        y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, warp_model.output])
+        return tf.keras.Model(warp_model.inputs + [img_input], y_img).predict([src, trg, img])
+
 
 class VxmAffineSegSemiSupervised(LoadableModel):
     """
@@ -696,23 +752,23 @@ class VxmAffineSegSemiSupervised(LoadableModel):
         self.references = LoadableModel.ReferenceContainer()
         self.references.affine = vxm_model.references.affine
 
-    def get_warp_model(self):
+    def get_registration_model(self):
         """
         Returns a reconfigured model to predict only the final transform.
         """
         return tf.keras.Model(self.inputs[:2], self.references.affine)
 
-    def predict_warp(self, src, trg):
+    def register(self, src, trg):
         """
         Predicts the transform from src to trg tensors.
         """
-        return self.get_warp_model().predict([src, trg])
+        return self.get_registration_model().predict([src, trg])
 
-    def apply_warp(self, src, trg, img, interp_method='linear'):
+    def apply_transform(self, src, trg, img, interp_method='linear'):
         """
         Predicts the transform from src to trg and applies it to the img tensor.
         """
-        warp_model = self.get_warp_model()
+        warp_model = self.get_registration_model()
         img_input = tf.keras.Input(shape=img[1:])
         y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, warp_model.output])
         return tf.keras.Model(warp_model.inputs + [img_input], y_img).predict([src, trg, img])
@@ -747,15 +803,17 @@ class VxmDenseSurfaceSemiSupervised(LoadableModel):
         surface_points_shape = [nb_surface_points, len(inshape) + 1]
         single_pt_trf = lambda x: point_spatial_transformer(x, sdt_vol_resize=sdt_vol_resize)
 
-        # vm model
-        dense = VxmDense(inshape, nb_unet_features=nb_unet_features, bidir=True, **kwargs)
+        # vxm model
+        vxm_model = VxmDense(inshape, nb_unet_features=nb_unet_features, bidir=True, **kwargs)
+        pos_flow = vxm_model.references.pos_flow
+        neg_flow = vxm_model.references.neg_flow
 
         # surface inputs and invert atlas_v for inverse transform to get final 'atlas surface'
         atl_surf_input = tf.keras.Input(surface_points_shape, name='atl_surface_input')
 
         # warp atlas surface
         # NOTE: pos diffflow is used to define an image moving x --> A, but when moving points, it moves A --> x
-        warped_atl_surf_pts = Lambda(single_pt_trf, name='warped_atl_surface')([atl_surf_input, dense.references.pos_flow])
+        warped_atl_surf_pts = Lambda(single_pt_trf, name='warped_atl_surface')([atl_surf_input, pos_flow])
 
         # get value of dt_input *at* warped_atlas_surface
         subj_dt_input = tf.keras.Input([*sdt_shape, nb_labels_sample], name='subj_dt_input')
@@ -764,20 +822,45 @@ class VxmDenseSurfaceSemiSupervised(LoadableModel):
         if surf_bidir:
             # go the other way and warp subject to atlas
             subj_surf_input = tf.keras.Input(surface_points_shape, name='subj_surface_input')
-            warped_subj_surf_pts = Lambda(single_pt_trf, name='warped_subj_surface')([subj_surf_input, dense.references.neg_flow])
+            warped_subj_surf_pts = Lambda(single_pt_trf, name='warped_subj_surface')([subj_surf_input, neg_flow])
 
             atl_dt_input = tf.keras.Input([*sdt_shape, nb_labels_sample], name='atl_dt_input')
             atl_dt_value = Lambda(value_at_location, name='hausdorff_atl_dt')([atl_dt_input, warped_subj_surf_pts])
 
-            inputs  = [*dense.inputs, subj_dt_input, atl_dt_input, subj_surf_input, atl_surf_input]
-            outputs = [*dense.outputs, subj_dt_value, atl_dt_value]
+            inputs  = [*vxm_model.inputs, subj_dt_input, atl_dt_input, subj_surf_input, atl_surf_input]
+            outputs = [*vxm_model.outputs, subj_dt_value, atl_dt_value]
 
         else:
-            inputs  = [*dense.inputs, subj_dt_input, atl_surf_input]
-            outputs = [*dense.outputs, subj_dt_value]
+            inputs  = [*vxm_model.inputs, subj_dt_input, atl_surf_input]
+            outputs = [*vxm_model.outputs, subj_dt_value]
 
         # initialize the keras model
         super().__init__(inputs=inputs, outputs=outputs)
+
+        # cache pointers to important layers and tensors for future reference
+        self.references = LoadableModel.ReferenceContainer()
+        self.references.pos_flow = pos_flow
+
+    def get_registration_model(self):
+        """
+        Returns a reconfigured model to predict only the final transform.
+        """
+        return tf.keras.Model(self.inputs[:2], self.references.pos_flow)
+
+    def register(self, src, trg):
+        """
+        Predicts the transform from src to trg tensors.
+        """
+        return self.get_registration_model().predict([src, trg])
+
+    def apply_transform(self, src, trg, img, interp_method='linear'):
+        """
+        Predicts the transform from src to trg and applies it to the img tensor.
+        """
+        warp_model = self.get_registration_model()
+        img_input = tf.keras.Input(shape=img[1:])
+        y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, warp_model.output])
+        return tf.keras.Model(warp_model.inputs + [img_input], y_img).predict([src, trg, img])
 
 
 class VxmAffineSurfaceSemiSupervised(LoadableModel):
@@ -812,11 +895,12 @@ class VxmAffineSurfaceSemiSupervised(LoadableModel):
         # vm model
         affine_model = VxmAffine(inshape, enc_nf, **kwargs)
         affine_tensor = affine_model.references.affine
-        dense_tensor = layers.AffineToDense(inshape, name='affine_to_flow')(affine_tensor)
-        dense = tf.keras.models.Model(affine_model.inputs, dense_tensor)
+        pos_flow = layers.AffineToDense(inshape, name='affine_to_flow')(affine_tensor)
+        
+        # invert
         inverse_affine = layers.InvertAffine(name='affine_invert')(affine_tensor)
-        pos_flow = dense_tensor
         neg_flow = layers.AffineToDense(inshape, name='neg_affine_to_flow')(inverse_affine)
+
         # surface inputs and invert atlas_v for inverse transform to get final 'atlas surface'
         atl_surf_input = tf.keras.Input(surface_points_shape, name='atl_surface_input')
 
@@ -851,6 +935,27 @@ class VxmAffineSurfaceSemiSupervised(LoadableModel):
         self.references.affine = affine_tensor
         self.references.pos_flow = pos_flow
         self.references.neg_flow = neg_flow
+
+    def get_registration_model(self):
+        """
+        Returns a reconfigured model to predict only the final transform.
+        """
+        return tf.keras.Model(self.inputs[:2], self.references.affine)
+
+    def register(self, src, trg):
+        """
+        Predicts the transform from src to trg tensors.
+        """
+        return self.get_registration_model().predict([src, trg])
+
+    def apply_transform(self, src, trg, img, interp_method='linear'):
+        """
+        Predicts the transform from src to trg and applies it to the img tensor.
+        """
+        warp_model = self.get_registration_model()
+        img_input = tf.keras.Input(shape=img[1:])
+        y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, warp_model.output])
+        return tf.keras.Model(warp_model.inputs + [img_input], y_img).predict([src, trg, img])
 
 
 class VxmSynthetic(LoadableModel):

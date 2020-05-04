@@ -65,7 +65,7 @@ if args.affine_model:
 
     with tf.device(device):
         # load the affine model, predict the transform(s), and merge
-        affine = vxm.networks.VxmAffine.load(args.affine_model).predict_warp(moving_resized, fixed_resized)
+        affine = vxm.networks.VxmAffine.load(args.affine_model).register(moving_resized, fixed_resized)
 
         # apply the transform and crop back to the target space
         moving = moving_padded[np.newaxis]
@@ -82,7 +82,7 @@ if args.model:
 
     with tf.device(device):
         # load model and predict
-        warp = vxm.networks.VxmDense.load(args.model).predict_warp(moving, fixed)
+        warp = vxm.networks.VxmDense.load(args.model).register(moving, fixed)
         moved = vxm.tf.utils.transform(moving, warp)
 
     # save warp
