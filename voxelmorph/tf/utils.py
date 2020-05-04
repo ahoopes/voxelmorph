@@ -1,4 +1,35 @@
+import numpy as np
 import tensorflow as tf
+import tensorflow.keras.backend as K
+
+from . import neuron as ne
+
+
+def is_affine(shape):
+    return len(shape) == 1 or (len(shape) == 2 and shape[0] + 1 == shape[1])
+
+
+def extract_affine_ndims(shape):
+    if len(shape) == 1:
+        # if vector, just compute ndims since length = N * (N + 1)
+        return int((np.sqrt(4 * int(shape[0]) + 1) - 1) / 2)
+    else:
+        return int(shape[0])
+
+
+def affine_shift_to_identity(trf):
+    ndims = extract_affine_ndims(trf.shape.as_list())
+    trf = tf.reshape(trf, [ndims, ndims + 1])
+    trf = tf.concat([trf, tf.zeros((1, ndims + 1))], axis=0)
+    trf += tf.eye(ndims + 1)
+    return trf
+
+
+def affine_identity_to_shift(trf):
+    ndims = int(trf.shape.as_list()[-1]) - 1
+    trf = trf - tf.eye(ndims + 1)
+    trf = trf[:ndims, :]
+    return tf.reshape(trf, [ndims * (ndims + 1)])
 
 
 def gaussian_blur(tensor, level, ndims):

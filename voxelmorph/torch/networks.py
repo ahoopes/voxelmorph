@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions.normal import Normal
 
+from .. import default_unet_features
 from . import layers
 from .modelio import LoadableModel, store_config_args
 
@@ -35,10 +36,7 @@ class Unet(nn.Module):
 
         # default encoder and decoder layer features if nothing provided
         if nb_features is None:
-            nb_features = [
-                [16, 32, 32, 32],             # encoder
-                [32, 32, 32, 32, 32, 16, 16]  # decoder
-            ]
+            nb_features = default_unet_features()
 
         # build feature list automatically
         if isinstance(nb_features, int):
@@ -47,6 +45,8 @@ class Unet(nn.Module):
             feats = np.round(nb_features * feat_mult ** np.arange(nb_levels)).astype(int)
             enc_nf = feats[:-1]
             dec_nf = np.flip(feats)
+        elif nb_levels is not None:
+            raise ValueError('cannot use nb_levels if nb_features is not an integer')
 
         self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
 

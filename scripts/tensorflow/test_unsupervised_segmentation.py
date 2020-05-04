@@ -116,7 +116,7 @@ with tf.device(device):
     funcs = make_k_functions(inshape, mapping, max_feats=args.max_feats, norm_post=False)
 
     # load the model from file
-    model = vxm.networks.ProbAtlasSegmentation.load(args.model).get_predictor_model()
+    model = vxm.networks.ProbAtlasSegmentation.load(args.model).get_gaussian_warp_model()
 
     # predict log likelihood and flow
     outputs = model.predict([image, atlas])

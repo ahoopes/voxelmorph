@@ -3,6 +3,8 @@
 
 from . import generators
 from . import py
+from .py.utils import default_unet_features
+
 
 # import backend-dependent submodules
 backend = py.utils.get_backend()
