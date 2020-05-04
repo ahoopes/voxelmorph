@@ -13,7 +13,6 @@ class NCC:
     def __init__(self, win=None, eps=1e-5):
         self.win = win
         self.eps = eps
-        self.blur_level = blur_level  # gaussian blur level for bluring y_true
 
     def ncc(self, I, J):
         # get dimension of volume
