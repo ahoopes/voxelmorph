@@ -11,8 +11,8 @@ def transform(img, trf, interp_method='linear', rescale=None):
     Applies a transform to an image. Note that inputs and outputs are
     in tensor format i.e. (batch, *imshape, nchannels).
     """
-    img_input = tf.keras.Input(shape=img[1:])
-    trf_input = tf.keras.Input(shape=trf[1:])
+    img_input = tf.keras.Input(shape=img.shape[1:])
+    trf_input = tf.keras.Input(shape=trf.shape[1:])
     if rescale is not None:
         trf_input = layers.RescaleTransform(rescale)(trf_input)
     y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, trf_input])

@@ -83,7 +83,7 @@ if args.model:
     with tf.device(device):
         # load model and predict
         warp = vxm.networks.VxmDense.load(args.model).predict_warp(moving, fixed)
-        moved = vxm.tf.utils.transform(moving, fixed)
+        moved = vxm.tf.utils.transform(moving, warp)
 
     # save warp
     if args.save_warp:
