@@ -65,14 +65,11 @@ if args.affine_model:
 
     with tf.device(device):
         # load the affine model, predict the transform(s), and merge
-        affine_net = vxm.networks.VxmAffine.load(args.affine_model).get_predictor_model()
-        affine = affine_net.predict([moving_resized, fixed_resized])
-        if resize != 1.0:
-            raise NotImplementedError('affine resize is currently under construction')
+        affine = vxm.networks.VxmAffine.load(args.affine_model).predict_warp(moving_resized, fixed_resized)
 
         # apply the transform and crop back to the target space
         moving = moving_padded[np.newaxis]
-        aligned = vxm.networks.Transform(padshape[:-1], affine=True).predict([moving, affine])[0, ...]
+        aligned = vxm.tf.utils.transform(moving, affine, rescale=(1 / resize))[0, ...]
         moved = aligned[cropping]
 
         # set as 'moving' for the following nonlinear registration
@@ -85,8 +82,8 @@ if args.model:
 
     with tf.device(device):
         # load model and predict
-        warp_predictor = vxm.networks.VxmDense.load(args.model).get_predictor_model()
-        moved, warp = warp_predictor.predict([moving, fixed])
+        warp = vxm.networks.VxmDense.load(args.model).predict_warp(moving, fixed)
+        moved = vxm.tf.utils.transform(moving, fixed)
 
     # save warp
     if args.save_warp:

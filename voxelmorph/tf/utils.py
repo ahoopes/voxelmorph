@@ -3,6 +3,20 @@ import tensorflow as tf
 import tensorflow.keras.backend as K
 
 from . import neuron as ne
+from .layers import SpatialTransformer, RescaleTransform
+
+
+def transform(img, trf, interp_method='linear', rescale=None):
+    """
+    Applies a transform to an image. Note that inputs and outputs are
+    in tensor format i.e. (batch, *imshape, nchannels).
+    """
+    img_input = tf.keras.Input(shape=img[1:])
+    trf_input = tf.keras.Input(shape=trf[1:])
+    if rescale is not None:
+        trf_input = RescaleTransform(rescale)(trf_input)
+    y_img = SpatialTransformer(interp_method=interp_method)([img_input, trf_input])
+    return tf.keras.Model([img_input, trf_input], y_img).predict([img, trf])
 
 
 def is_affine(shape):

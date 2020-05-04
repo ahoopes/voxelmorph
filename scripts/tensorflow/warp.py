@@ -43,10 +43,8 @@ else:
 
 with tf.device(device):
 
-    # build transfer model
+    # build transfer model and warp
     transform_model = vxm.networks.Transform(moving.shape[1:-1], interp_method=args.interp, nb_feats=moving.shape[-1])
-
-    # warp segments with flow
     moved = transform_model.predict([moving, deform])
 
 # save moved image
